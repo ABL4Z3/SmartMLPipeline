@@ -1,0 +1,194 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.model_selection import train_test_split, GridSearchCV
+from sklearn.preprocessing import StandardScaler, OneHotEncoder, OrdinalEncoder, PowerTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor, GradientBoostingRegressor
+from sklearn.linear_model import LogisticRegression, LinearRegression
+from sklearn.svm import SVC, SVR
+from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
+from sklearn.neighbors import KNeighborsClassifier, KNeighborsRegressor
+from sklearn.metrics import accuracy_score, mean_squared_error
+from sklearn.pipeline import Pipeline
+from sklearn.compose import ColumnTransformer
+from sklearn.decomposition import PCA
+import pickle
+
+# Function to remove outliers
+def remove_outliers(df, columns):
+    """Removes outliers using the IQR method for specified columns."""
+    for col in columns:
+        Q1 = df[col].quantile(0.25)
+        Q3 = df[col].quantile(0.75)
+        IQR = Q3 - Q1
+        lower_bound = Q1 - 1.5 * IQR
+        upper_bound = Q3 + 1.5 * IQR
+        df = df[(df[col] >= lower_bound) & (df[col] <= upper_bound)]
+    return df
+
+# Function to load data with error handling
+def load_data(file_path):
+    """Loads CSV data and handles potential errors."""
+    try:
+        df = pd.read_csv(file_path)
+        df.columns = df.columns.str.strip()  # Clean column names
+        print(f"Data loaded successfully. Shape: {df.shape}")
+        return df
+    except FileNotFoundError:
+        print(f"File not found: {file_path}")
+        return None
+    except Exception as e:
+        print(f"Error loading data: {e}")
+        return None
+
+# Function to clean data
+def clean_data(df):
+    """Fills missing values in numeric and categorical columns."""
+    numeric_cols = df.select_dtypes(include=['int64', 'float64']).columns
+    categorical_cols = df.select_dtypes(include=['object']).columns
+    df[numeric_cols] = df[numeric_cols].fillna(df[numeric_cols].median())
+    df[categorical_cols] = df[categorical_cols].fillna(df[categorical_cols].mode().iloc[0])
+    return df
+
+# Function to summarize data
+def data_summary(df):
+    """Displays a summary of the dataset."""
+    print("\nSummary Statistics:")
+    print(df.describe())
+    print("\nMissing Values:")
+    print(df.isnull().sum())
+    print("\nData Types:")
+    print(df.dtypes)
+
+# Function to visualize data
+def visualize_data(df):
+    """Generates histograms for numeric columns and a heatmap of correlations."""
+    numeric_cols = df.select_dtypes(include=['int64', 'float64']).columns
+    for col in numeric_cols:
+        plt.figure(figsize=(8, 5))
+        sns.histplot(df[col], kde=True, bins=30)
+        plt.title(f'Distribution of {col}')
+        plt.show()
+
+    plt.figure(figsize=(10, 8))
+    sns.heatmap(df[numeric_cols].corr(), annot=True, cmap='coolwarm')
+    plt.title('Correlation Heatmap')
+    plt.show()
+
+# Function to encode categorical data
+def encode_data(df):
+    """Encodes categorical data using Ordinal Encoding."""
+    categorical_cols = df.select_dtypes(include=['object']).columns
+    encoders = {}
+    for col in categorical_cols:
+        encoder = OrdinalEncoder()
+        df[col] = encoder.fit_transform(df[[col]])
+        encoders[col] = encoder
+    return df, encoders
+
+# Function to scale numeric data
+def scale_data(df):
+    """Scales numeric data using StandardScaler."""
+    scaler = StandardScaler()
+    numeric_cols = df.select_dtypes(include=['int64', 'float64']).columns
+    df[numeric_cols] = scaler.fit_transform(df[numeric_cols])
+    return df, scaler
+
+# Function to evaluate models
+def evaluate_models(df, target_column, task_type='classification'):
+    """Evaluates multiple models and selects the best one."""
+    numeric_features = df.select_dtypes(include=['int64', 'float64']).columns.tolist()
+    categorical_features = df.select_dtypes(include=['object']).columns.tolist()
+
+    # Preprocessing pipelines
+    numeric_transformer = Pipeline(steps=[
+        ('imputer', SimpleImputer(strategy='mean')),
+        ('scaler', StandardScaler()),
+        ('power_transform', PowerTransformer()),
+        ('pca', PCA(n_components=0.95))
+    ])
+
+    categorical_transformer = Pipeline(steps=[
+        ('imputer', SimpleImputer(strategy='most_frequent')),
+        ('onehot', OneHotEncoder(handle_unknown='ignore'))
+    ])
+
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ('num', numeric_transformer, numeric_features),
+            ('cat', categorical_transformer, categorical_features)
+        ]
+    )
+
+    # Models to evaluate
+    models = {
+        'RandomForest': RandomForestClassifier(random_state=42) if task_type == 'classification' else RandomForestRegressor(random_state=42),
+        'LogisticRegression': LogisticRegression(max_iter=1000) if task_type == 'classification' else LinearRegression(),
+        'SVC': SVC() if task_type == 'classification' else SVR(),
+        'DecisionTree': DecisionTreeClassifier(random_state=42) if task_type == 'classification' else DecisionTreeRegressor(random_state=42),
+        'KNeighbors': KNeighborsClassifier() if task_type == 'classification' else KNeighborsRegressor()
+    }
+
+    param_grids = {
+        'RandomForest': {'model__n_estimators': [100, 200], 'model__max_depth': [10, 20]},
+        'SVC': {'model__C': [1, 10], 'model__gamma': ['scale', 'auto']}
+    }
+
+    # Data splitting
+    df = remove_outliers(df, numeric_features)
+    X = df.drop(columns=[target_column])
+    y = df[target_column]
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+    best_model = None
+    best_score = -np.inf if task_type == 'classification' else np.inf
+    best_model_name = None
+
+    # Model evaluation
+    for name, model in models.items():
+        pipeline = Pipeline(steps=[('preprocessor', preprocessor), ('model', model)])
+        grid = param_grids.get(name)
+        if grid:
+            search = GridSearchCV(pipeline, param_grid=grid, cv=5, scoring='accuracy' if task_type == 'classification' else 'neg_mean_squared_error')
+            search.fit(X_train, y_train)
+            final_model = search.best_estimator_
+        else:
+            pipeline.fit(X_train, y_train)
+            final_model = pipeline
+
+        y_pred = final_model.predict(X_test)
+        if task_type == 'classification':
+            score = accuracy_score(y_test, y_pred)
+            print(f"{name} Accuracy: {score:.2f}")
+        else:
+            score = mean_squared_error(y_test, y_pred, squared=False)
+            print(f"{name} RMSE: {score:.2f}")
+
+        if (task_type == 'classification' and score > best_score) or (task_type == 'regression' and score < best_score):
+            best_model = final_model
+            best_score = score
+            best_model_name = name
+
+    print(f"\nBest Model: {best_model_name} with score: {best_score:.2f}")
+    with open('best_model_pipeline.pkl', 'wb') as f:
+        pickle.dump(best_model, f)
+
+# Main function
+def main(file_path, target_column, task_type='classification'):
+    df = load_data(file_path)
+    if df is not None:
+        df = clean_data(df)
+        data_summary(df)
+        visualize_data(df)
+        df, _ = encode_data(df)
+        df, _ = scale_data(df)
+        evaluate_models(df, target_column, task_type)
+
+# Example usage
+if __name__ == "__main__":
+    file_path = 'your_dataset.csv'
+    target_column = 'target_column'  # Replace with actual target column
+    task_type = 'classification'  # or 'regression'
+    main(file_path, target_column, task_type)
