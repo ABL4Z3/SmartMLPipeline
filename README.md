@@ -1,5 +1,5 @@
 Universal Machine Learning Automation Script
-👋 Hi, I’m @ABL4Z3, a passionate machine learning enthusiast and developer.
+👋 Hi, I’m Aayush kumar, a passionate machine learning enthusiast and developer.
 
 🚀 Project Overview
 I'm thrilled to introduce my Universal Machine Learning Automation Script. This versatile code can handle both regression and classification tasks, automatically apply multiple algorithms, and pickle the best model for future use.
